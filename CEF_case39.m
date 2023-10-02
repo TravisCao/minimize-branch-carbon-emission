@@ -1,26 +1,11 @@
 % function [En, Rg, RL, Rb1, Rl, CE_Gen, CE_Load, CE_Loss, obj] = CEF_case39(Pg)
-function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, Pg)
+function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, renew, choice, Pg)
     %……输入变量 
     %T—时间间隔，mpc—电网参数，Eg—发电机排放强度
     %……输出变量
     %En—ICEF intensity节点碳排放强度,Rg—ECEF机组碳排放rate
     %RL—load ICEF rate,Rb1—BCEF线路rate,Rl—BCEL线损rate
     %CE_Gen—机组排放量,CE_Load—负荷排放量,CE_Loss-线损排放总量  CE_Gen-CE_Load=CE_Loss；
-    
-    %% %%%%%%%%%%%%%
-    % T = 1;    % 持续时间 h
-    % mpc = loadcase('case39');
-    % n_bus = size(mpc.bus, 1);
-    
-    % Gn = length(mpc.gen(:, 1));  %bsn = length(mpc.bus(:,1));   brn = length(mpc.branch(:,1));
-    % Eg = zeros(Gn, 1);           %  ECEF intensity   % 发电机碳排放强度
-    % Eg(mpc.gen(:, 2) > 600) = 0.875;      % 单位：tCO2/M·Wh    
-    % Eg(300 < mpc.gen(:,2) & mpc.gen(:, 2) <= 600) = 0.500;  
-    
-    % 单一时间断面
-    % mpc.gen(:, 2) = Pg;
-
-    % T = 24;
 
     % 目标最小化区间 [1, 39], [4, 5], [13 14]
     targetBranch_row = [1 4 13];
@@ -28,25 +13,73 @@ function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, Pg)
     sz = [39, 39];
     target_ind = sub2ind(sz, targetBranch_row, targetBranch_col);
 
+    windProfile = renew.wind;
+    solarProfile = renew.solar;
+    hydroProfile = renew.hydro;
+
     %% 主程序
-    % opt = mpoption('out.all', 1, 'verbose', 0, 'opf.init_from_mpc', 1);
+    opt = mpoption('out.all', 0, 'verbose', 0);
     % results =  runopf(mpc, opt);
     obj = zeros(T, 1);
-    nGens = 10;
+    nGens = size(mpc.gen, 1);
+    unconvergenceCount = 0;
     for t = 1:T
+        
+        % logging
+        sprintf("Time is %d", t)
+
         mpc.bus(:, 3) = HourlyLoadProfile(:, t);
-        mpc.gen(:, 2) = Pg((t - 1) * nGens + 1: t * nGens);
-        obj(t) = CEF_hourly(mpc);
+
+        if strcmp(choice, 'max-renew')
+            % set negative load as renewable max Pg
+            mpc.bus(renew.hydro_bus, 3) = mpc.bus(renew.hydro_bus, 3) - hydroProfile(t);
+            mpc.bus(renew.wind_bus, 3) = mpc.bus(renew.wind_bus, 3) - windProfile(t);
+            mpc.bus(renew.solar_bus, 3) = mpc.bus(renew.solar_bus, 3) - solarProfile(t);
+            [results, success] = rundcopf(mpc);
+            results.gen(:, 2)
+        else
+            % set renewable PMAX to time-varient
+            mpc.gen(renew.wind_gen, 9) = windProfile(t);
+            mpc.gen(renew.solar_gen, 9) = solarProfile(t);
+            mpc.gen(renew.hydro_gen, 9) = hydroProfile(t);
+            if strcmp(choice, 'pf')
+                mpc.gen(:, 2) = Pg((t - 1) * nGens + 1: t * nGens);
+                [results, success] = rundcpf(mpc, opt);
+                results.gen(:, 2)
+            elseif strcmp(choice, 'opf')
+                [results, success] = rundcopf(mpc);
+                sprintf("run opf")
+                results.gen(:, 2)
+            end
+        end
+        if success == 0
+            unconvergenceCount = unconvergenceCount + 1;
+        end
+        obj(t) = CEF_hourly(results, success);
     end
     
-    obj = mean(obj);
+    unconvergenceCount
+    obj
+    
+    if strcmp(choice, 'pf')
+        obj = mean(obj);
+    end
 
-    function obj_hourly = CEF_hourly(mpc)
+    function obj_hourly = CEF_hourly(results, success)
         % result
-        [results, success] = runpf(mpc);
+        % [results, success] = runpf(mpc);
         
-        if success == 0
-            obj_hourly = abs(sum(Pg) - sum(mpc.bus(:, 3)));
+        pg_result = results.gen(:, 2);
+        pg_ub = results.gen(:, 9);
+        pg_lb = results.gen(:, 10);
+        if success == 0 
+            obj_hourly = 100000;
+            return
+        elseif  ~all(pg_result < pg_ub | abs(pg_result - pg_ub) < 1e-3)
+            obj_hourly = sum(abs(pg_result - pg_ub));
+            return
+        elseif ~all(pg_result > pg_lb | abs(pg_result - pg_ub) < 1e-3)
+            obj_hourly = sum(abs(pg_result - pg_lb));
             return
         end
     
