@@ -32,10 +32,15 @@ function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, renew, choice, Pg)
 
         if strcmp(choice, 'max-renew')
             % set negative load as renewable max Pg
-            mpc.bus(renew.hydro_bus, 3) = mpc.bus(renew.hydro_bus, 3) - hydroProfile(t);
-            mpc.bus(renew.wind_bus, 3) = mpc.bus(renew.wind_bus, 3) - windProfile(t);
-            mpc.bus(renew.solar_bus, 3) = mpc.bus(renew.solar_bus, 3) - solarProfile(t);
-            [results, success] = rundcopf(mpc);
+            mpc.gen(renew.wind_gen, 9) = windProfile(t);
+            mpc.gen(renew.solar_gen, 9) = solarProfile(t);
+            mpc.gen(renew.hydro_gen, 9) = hydroProfile(t);
+%             mpc.bus(renew.hydro_bus, 3) = mpc.bus(renew.hydro_bus, 3) - hydroProfile(t);
+%             mpc.bus(renew.wind_bus, 3) = mpc.bus(renew.wind_bus, 3) - windProfile(t);
+%             mpc.bus(renew.solar_bus, 3) = mpc.bus(renew.solar_bus, 3) - solarProfile(t);
+            [results, success] = rundcopf(mpc, opt);
+            obj(t) = CEF_hourly(results, success, 'no');
+            sprintf("run max renew")
             results.gen(:, 2)
         else
             % set renewable PMAX to time-varient
@@ -45,9 +50,11 @@ function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, renew, choice, Pg)
             if strcmp(choice, 'pf')
                 mpc.gen(:, 2) = Pg((t - 1) * nGens + 1: t * nGens);
                 [results, success] = rundcpf(mpc, opt);
+                obj(t) = CEF_hourly(results, success, 'fitness');
                 results.gen(:, 2)
             elseif strcmp(choice, 'opf')
                 [results, success] = rundcopf(mpc);
+                obj(t) = CEF_hourly(results, success, 'no');
                 sprintf("run opf")
                 results.gen(:, 2)
             end
@@ -55,7 +62,6 @@ function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, renew, choice, Pg)
         if success == 0
             unconvergenceCount = unconvergenceCount + 1;
         end
-        obj(t) = CEF_hourly(results, success);
     end
     
     unconvergenceCount
@@ -65,22 +71,22 @@ function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, renew, choice, Pg)
         obj = mean(obj);
     end
 
-    function obj_hourly = CEF_hourly(results, success)
+    function obj_hourly = CEF_hourly(results, success, flag)
         % result
         % [results, success] = runpf(mpc);
         
-        pg_result = results.gen(:, 2);
-        pg_ub = results.gen(:, 9);
-        pg_lb = results.gen(:, 10);
+%         pg_result = results.gen(:, 2);
+%         pg_ub = results.gen(:, 9);
+%         pg_lb = results.gen(:, 10);
         if success == 0 
             obj_hourly = 100000;
             return
-        elseif  ~all(pg_result < pg_ub | abs(pg_result - pg_ub) < 1e-3)
-            obj_hourly = sum(abs(pg_result - pg_ub));
-            return
-        elseif ~all(pg_result > pg_lb | abs(pg_result - pg_ub) < 1e-3)
-            obj_hourly = sum(abs(pg_result - pg_lb));
-            return
+%         elseif  ~all(pg_result < pg_ub | abs(pg_result - pg_ub) < 1e-3)
+%             obj_hourly = sum(abs(pg_result - pg_ub));
+%             return
+%         elseif ~all(pg_result > pg_lb | abs(pg_result - pg_ub) < 1e-3)
+%             obj_hourly = sum(abs(pg_result - pg_lb));
+%             return
         end
     
         %% 节点分类  
@@ -157,6 +163,12 @@ function [obj] = CEF_case39(T, mpc, Eg, HourlyLoadProfile, renew, choice, Pg)
     
         % target
         obj_hourly = sum(Rb1(target_ind));
+%         renew_gen = [1 2 4 5 12];
+%         if strcmp(flag, 'fitness')
+%             if abs(sum(mpc.gen(renew_gen, 9) - mpc.gen(renew_gen, 2))) > 100
+%                 obj_hourly = obj_hourly + 1000 * sum(mpc.gen(renew_gen, 9) - mpc.gen(renew_gen, 2));
+%             end
+%         end
     end
 
 end

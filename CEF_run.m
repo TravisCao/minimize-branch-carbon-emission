@@ -1,5 +1,4 @@
-clc;
-claer;
+
 
 
 %% load
@@ -7,119 +6,99 @@ claer;
 % load in each timestep is calculated by using the average of each day in five days (120h)
 % P_{i, t} = 1 / 5 * \sum_{d=1}^{5} P_{i, t + (d-1) * 24}
 
-filename = 'data/Case39_LoadPattern_24Hours.csv';
-dataTable = readtable(filename,  'VariableNamingRule', 'preserve');
+loadProfile = load("data/Case39_LoadData_120Hours.mat");
+HourlyLoadProfile = mean(reshape(loadProfile.PD, [39, 24, 5]), 3);
 
-loadPatternMatrix = table2array(dataTable(:, 2:end));
+windProfile = load("data/wind.mat").wind;
+solarProfile = load("data/solar.mat").solar;
+hydroProfile = load("data/hydro.mat").hydro;
+
+% 这里设定的前提是将renew 加进gen，1:wind， 2:solar，12，4，5：hydro
+
+renew.wind = windProfile;
+renew.wind_bus = 3;
+renew.wind_gen = 1;
+renew.solar = solarProfile;
+renew.solar_bus = 15;
+renew.solar_gen = 2;
+renew.hydro = hydroProfile;
+renew.hydro_gen = [12 4 5];
+renew.hydro_bus = [39 31 32];
+
 
 %% renewable energy
 % TODO
 
-
-
-T = 1;
+T = 24;
 mpc = loadcase('case39');
-Gn = length(mpc.gen(:, 1));  % bsn = length(mpc.bus(:,1));   brn = length(mpc.branch(:,1));
-Eg = zeros(Gn, 1);           %  ECEF intensity   %发电机碳排放强度
-% 300, 600 是随机选取的
-Eg(mpc.gen(:, 2) >= 600) = 0.875;      % 单位：tCO2/M·Wh    
-Eg(300 < mpc.gen(:, 2) & mpc.gen(:, 2)< 600) = 0.500;  
-[En,Rg,RL,Rb1,Rl,CE_Gen,CE_Load,CE_Loss] = CEF(T, mpc, Eg);
-Rb1
 
+% 增加其他机组的总发电量
+% mpc.gen(5:end, 9) = 1800;
+% 增加所有线路的总容量
+% mpc.branch(:, 6) = 3000;
 
+Gn = length(mpc.gen(:, 1));  %bsn = length(mpc.bus(:, 1));   brn = length(mpc.branch(:, 1));
+Eg_orig = zeros(Gn, 1);           %  ECEF intensity   %发电机碳排放强度
+Eg_orig(mpc.gen(:, 2) > 600) = 0.875;      % 单位：tCO2/M·Wh    
+Eg_orig(300 < mpc.gen(:,2) & mpc.gen(:, 2) <= 600) = 0.500;
 
-function [En,Rg,RL,Rb1,Rl,CE_Gen,CE_Load,CE_Loss] = CEF(T,mpc,Eg)
-    %……输入变量 
-    %T—时间间隔，mpc—电网参数，Eg—发电机排放强度
-    %……输出变量
-    %En—ICEF intensity节点碳排放强度,Rg—ECEF机组碳排放rate
-    %RL—load ICEF rate,Rb1—BCEF线路rate,Rl—BCEL线损rate
-    %CE_Gen—机组排放量,CE_Load—负荷排放量,CE_Loss-线损排放总量  CE_Gen-CE_Load=CE_Loss；
-    
-    %% %%%%%%%%%%%%%
-    % T = 1;    % 持续时间 h
-    % mpc = loadcase('case30');
-    
-    % Gn = length(mpc.gen(:,1));  %bsn = length(mpc.bus(:,1));   brn = length(mpc.branch(:,1));
-    % Eg = zeros(Gn,1);           %  ECEF intensity   %发电机碳排放强度
-    % Eg(mpc.gen(:,2)>40) = 0.875;      % 单位：tCO2/M·Wh    
-    % Eg(20<mpc.gen(:,2) & mpc.gen(:,2)<40) = 0.500;  
-    
-    %% 主程序
-    results =  runopf(mpc);
-    %% 节点分类  
-    Ejn = results.gen(:,1);  gn = length(Ejn);
-    bsn = length(results.bus(:,1));  brn = length(results.branch(:,1));
-    Ijn = results.bus(:,1);
-    Ijn(Ejn)=[];
-    %% ECEF intensity 
-    PG = zeros(bsn,gn); 
-    for g=1:gn
-        PG(Ejn(g),g) = results.gen(g,2);
-    end
-    Rg = PG*Eg;                % ECEF rate 
-    %% ICEE intensity
-    Br_o = results.branch;
-    Pb1 = zeros(bsn);   %节点注入功率矩阵
-    Pb = zeros(bsn);    %节点流出功率矩阵
-    LoN = find(results.bus(:,3)>0);   ln = length(LoN);   
-    Lcp = results.bus(LoN,3);
-    PLo = zeros(bsn,ln); 
-    for l=1:ln
-        PLo(LoN(l),l) = Lcp(l);
-    end
-    Br_loss = zeros(brn,1);
-    for l=1:brn
-        if Br_o(l,14)>0 
-            Pb1(Br_o(l,1),Br_o(l,2)) = abs(Br_o(l,16));
-            Pb(Br_o(l,2),Br_o(l,1)) = Br_o(l,14);
-        else
-            Pb1(Br_o(l,2),Br_o(l,1)) = abs(Br_o(l,14));
-            Pb(Br_o(l,1),Br_o(l,2)) = Br_o(l,16);
-        end
-    %     Br_loss(l) = abs(Br_o(l,14)+Br_o(l,16));
-    end
-    % aaaa = [Pb1;PG'];
-    Pnd = diag(ones(1,bsn+gn)*[Pb1;PG']);
-    Pnd_p = Pnd;   Pb1_p = Pb1;  Rg_p = Rg;  Pb_p = Pb;   PLo_p = PLo;
-    if ~det(Pnd)
-        dl = find(sum(Pnd)==0);
-        Pnd_p(dl,:)=[];  Pnd_p(:,dl)=[];
-        Pb1_p(dl,:)=[];  Pb1_p(:,dl)=[];
-        Pb_p(dl,:)=[];   Pb_p(:,dl)=[];
-        Rg_p(dl)=[];     PLo_p(dl,:) = [];
-    end
-    En_p = (inv(Pnd_p-Pb1_p'))*Rg_p;       % ICEE intensity
-    %% ICEF rate  & BCEF rate  & BCEL rate
-    RL_p = diag(En_p)*PLo_p;          % ICEF rate
-    Rb1_p = diag(En_p)*Pb1_p;         % BCEF rate
-    % aaaa = (Pb_p'-Pb1_p);
-    Rl_p = diag(En_p)*(Pb_p'-Pb1_p);   % BCEL rate
-    %% 还原删减矩阵
-    dbl = zeros(1,ln);     dbu = zeros(1,bsn);
-    RL=RL_p;  Rb1=Rb1_p;  Rl=Rl_p; En=En_p;
-    
-    if ~det(Pnd)
-        for d=1:length(dl)
-            RL = [RL(1:dl(d)-1,:);zeros(1,length(RL(1,:)));RL(dl(d):end,:)];
-            %     RL_m = [RL_m(:,1:dl(d)-1),zeros(length(RL_m(:,1)),1),RL_m(:,dl(d):end)];
-            Rb1 = [Rb1(1:dl(d)-1,:);zeros(1,length(Rb1(:,1)));Rb1(dl(d):end,:)];
-            Rb1 = [Rb1(:,1:dl(d)-1),zeros(length(Rb1(:,1)),1),Rb1(:,dl(d):end)];
-            Rl = [Rl(1:dl(d)-1,:);zeros(1,length(Rl(:,1)));Rl(dl(d):end,:)];
-            Rl = [Rl(:,1:dl(d)-1),zeros(length(Rl(:,1)),1),Rl(:,dl(d):end)];
-            En = [En(1:dl(d)-1);0;En(dl(d):end)];
-        end
-    end
-% carbon emission rate 
-CR_g = Eg.*results.gen(:,2);  % tCO2/h
-CR_n = En.*results.bus(:,3);
-CR_loss = sum(sum(Rl));       % =sum(CR_g)-sum(CR_n)
-% carbon emission rate quantity
-CE_Gen = CR_g*T;
-CE_Load = CR_n*T;
-CE_Loss = CR_loss*T;
+% 增加其他机组容量到1000
+mpc.gen(:, PMAX) = 1100;
+mpc.branch(:, RATE_A) = 4000;
+
+% ------- 常规经济调度
+
+mpc_modified = mpc;
+
+% 加新能源
+wind_gen = mpc.gen(1, :);
+wind_gen(GEN_BUS) = 3;
+
+solar_gen = mpc.gen(1, :);
+solar_gen(GEN_BUS) = 15;
+
+% 1 & 2 新加：风光机组, 12 4 5 丽水内部 水电
+% 上网电价 常数 0.8
+renew_gencost_general = [2 0 0 3 0 0 0.8];
+mpc_modified.gen = [wind_gen; solar_gen; mpc_modified.gen];
+mpc_modified.gencost = [renew_gencost_general; renew_gencost_general; mpc_modified.gencost];
+mpc_modified.gencost(renew.hydro_gen, :) = repmat(renew_gencost_general, length(renew.hydro_gen), 1);
+
+% 新能源
+Eg_modified = Eg_orig;
+Eg_modified = [0; 0; Eg_modified];
+Eg_modified(renew.hydro_gen) = 0;
+
+nGens = size(mpc_modified.gen, 1);
+
+initialPopulationMatrix = ones(nvars, 1)';
+for t = 1:T
+    sum_renewable = solarProfile(t) + hydroProfile(t) * 3 + windProfile(t);
+    initialPopulationMatrix((t - 1) * nGens + 1: t * nGens) = (sum(HourlyLoadProfile(:, t)) - sum_renewable) / 7;
+    initialPopulationMatrix((t - 1) * nGens + renew.solar_gen) = solarProfile(t);
+    initialPopulationMatrix((t - 1) * nGens + renew.hydro_gen) = hydroProfile(t);
+    initialPopulationMatrix((t - 1) * nGens + renew.wind_gen) = windProfile(t);
 end
+
+
+mpc_modified.bus(:, 3) = HourlyLoadProfile(:, 1);
+mpc_modified.gen(:, 2) = initialPopulationMatrix(1:12);
+
+mpc_modified.gen(renew.wind_gen, 9) = windProfile(1);
+mpc_modified.gen(renew.solar_gen, 9) = solarProfile(1);
+mpc_modified.gen(renew.hydro_gen, 9) = hydroProfile(1);
+
+[obj] = CEF(T, mpc_modified, Eg_modified)
+
+mpc_renew_max.bus(:, 3) = HourlyLoadProfile(:, 1);
+mpc_renew_max.bus(renew.hydro_bus, 3) = mpc_renew_max.bus(renew.hydro_bus, 3) - hydroProfile(1);
+mpc_renew_max.bus(renew.wind_bus, 3) = mpc_renew_max.bus(renew.wind_bus, 3) - windProfile(1);
+mpc_renew_max.bus(renew.solar_bus, 3) = mpc_renew_max.bus(renew.solar_bus, 3) - solarProfile(1);
+sum_renewable = solarProfile(1) + hydroProfile(1) * 3 + windProfile(1);
+mpc_renew_max.gen(:, 2) = (sum(HourlyLoadProfile(:, 1)) - sum_renewable) / 7;
+CEF(T, mpc_renew_max, Eg_renew_max)
+
+
 
 % % carbon emission rate 
 % CR_g = Eg.*results.gen(:,2);  % tCO2/h
